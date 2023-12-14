@@ -6,6 +6,7 @@ from torch import Tensor
 import torch.utils
 import torch.distributions
 import numpy as np
+from typing import Optional
 
 import pandas as pd
 import itertools
@@ -442,7 +443,7 @@ class CDPmodel(nn.Module):
 
             if return_latents:
                 c_latent_k = []
-                d_latnet_k = []
+                d_latent_k = []
 
             if search_subcluster:
                 losses_train_hist_list_k_1 = []
@@ -450,7 +451,7 @@ class CDPmodel(nn.Module):
 
                 if return_latents:
                     c_latent_k_1 = []
-                    d_latnet_k_1 = []
+                    d_latent_k_1 = []
 
             meta_key = "k" + str(k)
             c_meta_k = c_meta[[meta_key]].rename(columns={meta_key:'key'})
@@ -467,9 +468,25 @@ class CDPmodel(nn.Module):
                 
                 c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1] 
 
-                zero_cluster, self.CDPmodel_list[k], c_centroid, d_centroid, c_sd, d_sd, c_name_cluster_k, d_name_sensitive_k, losses_train_hist, \
-                    best_epos, c_meta_k, d_sens_k = train_CDPmodel_local_1round(self.CDPmodel_list[k], device, False, c_data, c_meta_k, d_data, \
-                                                                                cdr, c_names_k_init, d_names_k_init, self.sens_cutoff, k, train_params)
+
+                (zero_cluster, self.CDPmodel_list[k], 
+                 c_centroid, d_centroid, c_sd, d_sd, 
+                 c_name_cluster_k, d_name_sensitive_k, 
+                 losses_train_hist, best_epos,) = train_CDPmodel_local_1round(
+                     self.CDPmodel_list[k], device, 
+                     ifsubmodel = False, 
+                     c_data = c_data, d_data = d_data, cdr_org = cdr, 
+                     c_names_k_init = c_names_k_init, d_names_k_init = d_names_k_init, 
+                     sens_cutoff = self.sens_cutoff, 
+                     group_id = k, 
+                     params = train_params
+                     )
+                
+                ## update binarized column vectors of cell and drug sensitivity based on results.
+                c_meta_k, d_sens_k = create_bin_sensitive_dfs(
+                    c_data, d_data, c_name_cluster_k, d_name_sensitive_k
+                )
+
                 
                 if zero_cluster:
                     # store/update the centroids
@@ -488,7 +505,7 @@ class CDPmodel(nn.Module):
 
                     if return_latents:
                         c_latent_k.append(None)
-                        d_latnet_k.append(None)
+                        d_latent_k.append(None)
 
                     break
 
@@ -515,7 +532,7 @@ class CDPmodel(nn.Module):
                         c_latent = self.CDPmodel_list[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
                         c_latent_k.append(c_latent.detach().numpy())
                         d_latent = self.CDPmodel_list[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                        d_latnet_k.append(d_latent.detach().numpy())
+                        d_latent_k.append(d_latent.detach().numpy())
                 
                 ## Use multiprocessing to run the loop in parallel for each k
                 # with multiprocessing.Pool() as pool:
@@ -527,7 +544,7 @@ class CDPmodel(nn.Module):
 
                 if return_latents:
                     c_latent_list.append(c_latent_k)
-                    d_latent_list.append(d_latnet_k)
+                    d_latent_list.append(d_latent_k)
             else:
                 losses_train_hist_list.append(None)
                 best_epos_list.append(None)
@@ -544,7 +561,8 @@ class CDPmodel(nn.Module):
                 print(f"  === {k}.2. sub local CDP model      ")
                 print(f"  ===================================")
 
-                self.CDPmodel_list_sub[k].load_state_dict(self.CDPmodel_list[k].state_dict())
+                self.CDPmodel_list_sub[k].load_state_dict(
+                    self.CDPmodel_list[k].state_dict())
 
                 c_name_k_1 = self.c_name_clusters_in_trainnig[k]
                 d_name_k_1 = self.d_name_clusters_in_trainnig[k]
@@ -563,6 +581,7 @@ class CDPmodel(nn.Module):
 
                         c_names_k_init_1 = c_name_k_1
 
+                        ## TODO: this feels quite arbitrary.
                         sensitive_cut_off = 0.2
                     else:
                         d_names_k_init_1 = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
@@ -570,16 +589,23 @@ class CDPmodel(nn.Module):
 
                         sensitive_cut_off = self.sens_cutoff
 
-                        # if b == 1:
-                        #     sensitive_cut_off = 0.4
-                        # else:
-                        #     sensitive_cut_off = self.sens_cutoff
+                    (zero_cluster_sub, self.CDPmodel_list_sub[k], 
+                     c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, 
+                     c_name_cluster_k_1, d_name_sensitive_k_1, 
+                     losses_train_hist_1,
+                     best_epos_1,) = train_CDPmodel_local_1round(
+                            self.CDPmodel_list_sub[k], device, 
+                            ifsubmodel = True, 
+                            c_data = c_data, d_data = d_data_1, cdr_org = cdr_1, 
+                            c_names_k_init = c_names_k_init_1, 
+                            d_names_k_init = d_names_k_init_1, 
+                            sens_cutoff = sensitive_cut_off, 
+                            group_id = k, params = train_params)
 
-                    zero_cluster_sub, self.CDPmodel_list_sub[k], c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, c_name_cluster_k_1, d_name_sensitive_k_1, losses_train_hist_1, \
-                        best_epos_1, c_meta_k_1, d_sens_k_1 = train_CDPmodel_local_1round(self.CDPmodel_list_sub[k], device, True, c_data, c_meta_k, d_data_1, \
-                                                                                    cdr_1, c_names_k_init_1, d_names_k_init_1, sensitive_cut_off, k, train_params)
-
-                    # print(c_meta_k_1)
+                    c_meta_k_1, d_sens_k_1 = create_bin_sensitive_dfs(
+                        c_data, d_data_1, 
+                        c_name_cluster_k_1, d_name_sensitive_k_1
+                    )
 
                     if(zero_cluster_sub):
                         print("  No subcluster found")
@@ -589,7 +615,7 @@ class CDPmodel(nn.Module):
                         
                         if return_latents:
                             c_latent_k_1.append(None)
-                            d_latnet_k_1.append(None)
+                            d_latent_k_1.append(None)
 
                         break
                     else:
@@ -614,7 +640,7 @@ class CDPmodel(nn.Module):
                             c_latent_1 = self.CDPmodel_list_sub[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
                             c_latent_k_1.append(c_latent_1.detach().numpy())
                             d_latent_1 = self.CDPmodel_list_sub[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                            d_latnet_k_1.append(d_latent_1.detach().numpy())
+                            d_latent_k_1.append(d_latent_1.detach().numpy())
                 
                 if k in self.which_non_empty_subcluster:
                     print(f"Subcluster found as cluster {self.original_K + self.which_non_empty_subcluster.index(k)}")
@@ -624,7 +650,7 @@ class CDPmodel(nn.Module):
 
                     if return_latents:
                         c_latent_list_sub.append(c_latent_k_1)
-                        d_latent_list_sub.append(d_latnet_k_1) 
+                        d_latent_list_sub.append(d_latent_k_1) 
                 else:
                     losses_train_hist_list_sub.append(None)
                     best_epos_list_sub.append(None)
@@ -715,11 +741,44 @@ class CDPmodel_sub(nn.Module):
         self.d_VAE.apply(weights_init_uniform_rule)
         self.predictor.apply(weights_init_uniform_rule)
 
-    def forward(self, c_X: Tensor, d_X: Tensor):
-        _, c_mu, c_log_var, c_Z, c_X_rec = self.c_VAE(c_X)
-        _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
+        self.c_mu_fixed = None
+        self.d_mu_fixed = None
+
+    def forward(
+            self, 
+            c_X: Optional[torch.Tensor] = None, 
+            d_X: Optional[torch.Tensor] = None, 
+            ):
+        ## Compute the needed embedding/s
+        if c_X is None:
+            c_mu = self.c_mu_fixed
+            c_log_var = self.c_log_var_fixed
+            c_X_rec = self.c_X_rec_fixed
+        else:
+            _, c_mu, c_log_var, c_Z, c_X_rec = self.c_VAE(c_X)
+
+        if d_X is None:
+            d_mu = self.d_mu_fixed
+            d_log_var = self.d_log_var_fixed
+            d_X_rec = self.d_X_rec_fixed
+        else:
+            _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
+
+        ## Run the predictor:
         CDR = self.predictor(c_mu, d_mu)
         return c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, CDR
+    
+    def update_fixed_encoding(
+            self, 
+            c_X: Optional[torch.Tensor] = None, 
+            d_X: Optional[torch.Tensor] = None,
+            ):
+        if c_X is not None:
+            with torch.no_grad():
+                _, self.c_mu_fixed, self.c_log_var_fixed, _, self.c_X_rec_fixed = self.c_VAE(c_X)
+        if d_X is not None:
+            with torch.no_grad():
+                _, self.d_mu_fixed, self.d_log_var_fixed, _, self.d_X_rec_fixed = self.d_VAE(d_X)
 
 
 
@@ -891,7 +950,18 @@ class Predictor(nn.Module):
     def forward(self, c_latent: Tensor, d_latent: Tensor):
         c = self.cell_line_layer(c_latent)
         d = self.drug_layer(d_latent)
-        combination = torch.cat([c, d], dim=1)
+
+        ### concatenate the vectors of each possible combination, in cell line order.
+        c_d1, c_d2 = c.shape
+        d_d1, d_d2 = d.shape
+
+        combination = torch.cat(
+            [torch.repeat_interleave(c, repeats=d_d1, dim=0), d.repeat(c_d1, 1), ]
+            , dim=-1,
+        )
+
+        #combination = torch.cat([c, d], dim=1)
+
         CDR = self.predictor_body(combination)
         return CDR
 
