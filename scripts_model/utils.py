@@ -224,8 +224,14 @@ def prepare_model_IO(
 
     ##---------------------
     ## train, test split, collect all into dictionary
+    
+    if train_data_type == 'cell':
+        stratify_array = cell_drug_idx[:,0][cdr_coords_not_na]
+    else:
+        stratify_array = cell_drug_idx[:,1][cdr_coords_not_na]
     cdr_idx_train, cdr_idx_valid = train_test_split(
-        cdr_coords_not_na, test_size=valid_size)
+        cdr_coords_not_na, test_size=valid_size,
+        stratify=stratify_array)
 
     cdr_outputs_dict = {}
     cdr_outputs_dict['cdr_vals'] = cdr_k_w_na

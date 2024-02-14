@@ -50,7 +50,9 @@ def train_CDPmodel_local_1round(
     D_update_ratio_weight = params['D_update_ratio_weight']
     predict_loss_weight = params['predict_loss_weight']
     rm_cluster_outliers = params['rm_cluster_outliers']
-
+    use_mixture_kld = params['use_mixture_kld'] ## whether to swap to mixture of Gaussians KLD during bicluster VAE training.
+    use_weighted_bce = params['use_weighted_bce']
+    
     if ifsubmodel == False:
         c_p_save_path = f"{params['c_p_save_path']}{'_'}{group_id}{'.pkl'}"
         d_p_save_path = f"{params['d_p_save_path']}{'_'}{group_id}{'.pkl'}"
@@ -112,7 +114,9 @@ def train_CDPmodel_local_1round(
         optimizer=optimizer_e,
         n_epochs=n_epochs,
         scheduler=exp_lr_scheduler_e,
-        save_path = d_p_save_path)
+        save_path = d_p_save_path,
+        use_mixture_kld = use_mixture_kld,
+        use_weighted_bce = use_weighted_bce)
     end = time.time()
     print(f"            Running time: {end - start}")
 
@@ -205,7 +209,10 @@ def train_CDPmodel_local_1round(
         optimizer=optimizer_e,
         n_epochs=n_epochs,
         scheduler=exp_lr_scheduler_e,
-        save_path = c_p_save_path)
+        save_path = c_p_save_path,
+        use_mixture_kld = use_mixture_kld,
+        use_weighted_bce = use_weighted_bce)
+    
     end = time.time()
     print(f"            Running time: {end - start}")
 
@@ -291,7 +298,9 @@ def train_CDPmodel_local(
         scheduler=None,
         load=False, 
         save_path="model.pkl", 
-        best_model_cache = "drive"):
+        best_model_cache = "drive",
+        use_mixture_kld = True,
+        use_weighted_bce = False):
     
     if(load!=False):
         if(os.path.exists(save_path)):
@@ -396,14 +405,33 @@ def train_CDPmodel_local(
 
 
                 y = outputs_dict['cdr_vals'][out_idx_in_batch[:,0]]
+                
                 y_hat = y_hat_mutable[out_idx_in_batch[:,0]]
+                ## TODO: remove after done debugging.
+                # print("YHAT MAX AND MIN========================================")
+                # print(torch.max(y_hat))
+                # print(torch.min(y_hat))
 
                 # compute loss
                 mse = nn.MSELoss(reduction="sum")
 
-                #   1. Prediction loss: 
-                bce = nn.BCELoss(reduction="mean")
-                prediction_loss = bce(y_hat, torch.tensor(y, dtype=torch.float32))
+                #   1. Prediction loss:
+                bce = nn.BCELoss(reduction="none")
+                prediction_losses = bce(y_hat, torch.tensor(y, dtype=torch.float32))
+                if use_weighted_bce:
+                    ## TODO: check approaches for weight values.
+                    weight_zero = np.mean(y)
+                    weight_one = 1 - weight_zero
+                    weights = np.zeros(prediction_losses.shape[0])
+                    sens = np.where(y)[0]
+                    weights[sens] = weight_one
+                    weights[weights==0] = weight_zero
+                    weights = torch.Tensor(weights)
+                    
+                    prediction_loss = torch.sum(prediction_losses * weights) / torch.sum(weights)
+
+                else:
+                    prediction_loss = torch.mean(prediction_losses)
 
 
                 ### Prepare various loss-related objects depending on the update modality:
@@ -421,11 +449,6 @@ def train_CDPmodel_local(
                     idx_for_mu_repeats = np.vectorize(value_mapping.get)(idx_for_mu_repeats_if_full_batch)[:,0]
                     idx_k_old = outputs_dict['cell_idx_k_init']
                     
-
-                
-                # 1. VAE loss: reconstruction loss & kld
-                recon_loss, kld = custom_vae_loss(data, mu, log_var, X_rec, mse)
-
                 # 2. the loss of latent spaces distances:
                 #     - distances of cells/drugs in the predicted sensitive group to the cluster centroid 
                 #     + distances of cells/drugs outside the predicted sensitive group to the cluster centroid 
@@ -433,8 +456,37 @@ def train_CDPmodel_local(
                 sensitive = y_hat > sens_cutoff
                 sensitive = sensitive.long()
                 
+                ## TODO: remove below when done debugging.                
+                # print("Sensitive Proportion:::::::")
+                # print(torch.sum(sensitive) / sensitive.shape[0])
+                # print(torch.mean(y_hat))
+                # sens_k_act = np.zeros(len(data_idx))
+                # for i in range(len(data_idx)):
+                #         hat_mean = np.mean(y[idx_for_mu_repeats == i])
+                #         sens_k_act[i] = hat_mean > sens_cutoff
+                # print(np.sum(sens_k_act))
+                ## TODO: remove above when done debugging.
+                
+                
                 mu_full = mu[idx_for_mu_repeats].squeeze(1)
                 latent_dist_loss = cluster_mu_distance(mu_full, sensitive)
+                
+                idx_of_sensitive = np.unique(idx_for_mu_repeats[np.where(sensitive)[0]])
+                
+                # 3. VAE loss: reconstruction loss & kld (can be contingent on the clusters.)
+                if use_mixture_kld is False:
+                    recon_loss, kld = custom_vae_loss(
+                        data, mu, log_var, X_rec, mse)
+                else:
+                    ## TODO: pull Z from its original VAE generation
+                    std_temp = torch.exp(0.5 * log_var)
+                    z = mu + std_temp * torch.randn_like(std_temp)
+                    z_full = z[idx_for_mu_repeats].squeeze(1)
+                    log_var_full = log_var[idx_for_mu_repeats].squeeze(1)
+                    recon_loss, kld = bicluster_gauss_vae_loss(
+                        data, mu, log_var, X_rec, sensitive, idx_of_sensitive, mu_full, log_var_full, z_full,
+                        mse)
+
                     
                 ## default KLD weight if none is provided:
                 if kld_weight is None:
@@ -448,13 +500,16 @@ def train_CDPmodel_local(
                     )
 
 
-                # 3. requiring the updated cluster overlaping with the old clustering
+                # 4. requiring the updated cluster overlaping with the old clustering
 
                 if update_ratio_weight != 0:
                     sens_k = torch.zeros(len(data_idx))
                     for i in range(len(data_idx)):
-                        sens_k[i] = torch.mean(y_hat[idx_for_mu_repeats == i]) > sens_cutoff
-
+                        hat_mean = torch.mean(y_hat[idx_for_mu_repeats == i])
+                        sens_k[i] = hat_mean > sens_cutoff
+                    
+                    #print("Num sensitive items::")
+                    #print(torch.sum(sens_k).item())
                     ## total batch overlap with old cluster:
                     n_old_batch_olap = sum([c in data_idx for c in idx_k_old])
 
