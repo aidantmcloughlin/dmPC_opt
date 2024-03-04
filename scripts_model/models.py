@@ -58,6 +58,11 @@ class CDPmodel(nn.Module):
         self.d_sds = [None] * self.K
         self.d_in_trainnig = []
         self.d_name_clusters_in_trainnig = [None] * self.K
+        
+        self.train_row_idx_dict = {
+            'c_idx': None,
+            'd_idx': None
+            }
 
         self.sens_cutoff = params['sens_cutoff']
         
@@ -251,7 +256,14 @@ class CDPmodel(nn.Module):
         return CDR_df
 
 
-    def fit(self, c_data, c_meta, d_data, cdr, train_params, n_rounds=3, search_subcluster = True, device='cpu'):
+    def fit(
+        self, 
+        c_data, c_meta, 
+        d_data, cdr, 
+        train_params, 
+        n_rounds=3, 
+        search_subcluster = True, 
+        device='cpu'):
         
         c_meta_hist = c_meta.copy()
         d_sens_hist = pd.DataFrame() 
@@ -266,6 +278,19 @@ class CDPmodel(nn.Module):
 
         self.c_in_trainnig = c_data.index.values
         self.d_in_trainnig = d_data.index.values
+        
+        ## pre-establish training cells and compounds, if specified
+        if train_params['use_all_items_for_latent_training'] is False:
+            self.train_row_idx_dict = {
+                'c_idx': np.sort(np.random.choice(
+                    c_data.shape[0], 
+                    round(c_data.shape[0] * (1 - train_params['valid_size'])),
+                    replace = False)),
+                'd_idx': np.sort(np.random.choice(
+                    d_data.shape[0], 
+                    round(d_data.shape[0] * (1 - train_params['valid_size'])),
+                    replace = False)),
+            }
 
         if search_subcluster:
             losses_train_hist_list_sub = []
@@ -286,9 +311,21 @@ class CDPmodel(nn.Module):
 
         # 1. Pre-train a C-VAE and D-VAE on all cells and compounds (no clustering loss).  Copy each k-times as each initial bi-cluster VAE.
         print(f"=> Initialize C-VAE:")
-        C_VAE, C_VAE_init_losses = train_VAE(self.CDPmodel_list[0].c_VAE, device, c_data, vae_type = "C", save_path = train_params['cVAE_save_path'], params=train_params)
+        C_VAE, C_VAE_init_losses = train_VAE(
+            self.CDPmodel_list[0].c_VAE, 
+            device, 
+            c_data, 
+            vae_type = "C", 
+            save_path = train_params['cVAE_save_path'], 
+            params=train_params)
         print(f"=> Initialize D-VAE:")
-        D_VAE, D_VAE_init_losses = train_VAE(self.CDPmodel_list[0].d_VAE, device, d_data, vae_type = "D", save_path = train_params['dVAE_save_path'], params=train_params)
+        D_VAE, D_VAE_init_losses = train_VAE(
+            self.CDPmodel_list[0].d_VAE, 
+            device, 
+            d_data, 
+            vae_type = "D", 
+            save_path = train_params['dVAE_save_path'], 
+            params=train_params)
 
         # Assign C-VAE and D-VAE to each CDP model
         # Copy over the parameters
@@ -346,7 +383,8 @@ class CDPmodel(nn.Module):
                      c_names_k_init = c_names_k_init, d_names_k_init = d_names_k_init, 
                      sens_cutoff = self.sens_cutoff, 
                      group_id = k, 
-                     params = train_params
+                     params = train_params,
+                     train_row_idx_dict = self.train_row_idx_dict,
                      )
                 
                 ## update binarized column vectors of cell and drug sensitivity based on results.
@@ -470,7 +508,9 @@ class CDPmodel(nn.Module):
                             c_names_k_init = c_names_k_init_1, 
                             d_names_k_init = d_names_k_init_1, 
                             sens_cutoff = sensitive_cut_off, 
-                            group_id = k, params = train_params)
+                            group_id = k, 
+                            params = train_params,
+                            train_row_idx_dict = self.train_row_idx_dict,)
 
                     c_meta_k_1, d_sens_k_1 = create_bin_sensitive_dfs(
                         c_data, d_data_1, 
@@ -638,15 +678,9 @@ class CDPmodel_sub(nn.Module):
         else:
             _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
             
-
-        ## Run the predictor:
-        ## TODO: remove after debugging!
-        if torch.sum(torch.isnan(d_mu)).item() > 0:
-            print('check model')
-            _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
-            traceback.print_stack()
-            
+        ## Run the predictor:  
         CDR = self.predictor(c_mu, d_mu)
+        
         return c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, CDR
     
     def update_fixed_encoding(
@@ -795,25 +829,29 @@ class Predictor(nn.Module):
         super(Predictor, self).__init__()
 
         hidden_dims = deepcopy(h_dims)
-        hidden_dims.insert(0, 2*sec_dim)
-    
-        self.cell_line_layer = nn.Sequential(
-            nn.Linear(c_input_dim, sec_dim),
-            nn.Dropout(drop_out),
-            nn.ReLU()
-        )
+        hidden_dims.insert(0, c_input_dim+d_input_dim)
+        
 
-        self.drug_layer = nn.Sequential(
-            nn.Linear(d_input_dim, sec_dim),
-            nn.Dropout(drop_out),
-            nn.ReLU()
-        )
+        ## TODO: this is commented during debugging
+        # hidden_dims.insert(0, sec_dim)
+        # self.cell_line_layer = nn.Sequential(
+        #     nn.Linear(c_input_dim, sec_dim),
+        #     nn.Dropout(drop_out),
+        #     nn.ReLU()
+        # )
+
+        # self.drug_layer = nn.Sequential(
+        #     nn.Linear(d_input_dim, sec_dim),
+        #     nn.Dropout(drop_out),
+        #     nn.ReLU()
+        # )
+        ## TODO: this is commented during debugging
 
         # Predictor
         modules_e = []
-        for i in range(2, len(hidden_dims)):
-            i_dim = hidden_dims[i-1]
-            o_dim = hidden_dims[i]
+        for i in range(len(hidden_dims)-1):
+            i_dim = hidden_dims[i]
+            o_dim = hidden_dims[i+1]
 
             modules_e.append(
                 nn.Sequential(
@@ -833,15 +871,16 @@ class Predictor(nn.Module):
             
 
     def forward(self, c_latent: Tensor, d_latent: Tensor):
-        c = self.cell_line_layer(c_latent)
-        d = self.drug_layer(d_latent)
+        ## TODO: this is commented out during debugging:
+        # c = self.cell_line_layer(c_latent)
+        # d = self.drug_layer(d_latent)
 
         ### concatenate the vectors of each possible combination, in cell line order.
-        c_d1, c_d2 = c.shape
-        d_d1, d_d2 = d.shape
+        c_d1, c_d2 = c_latent.shape
+        d_d1, d_d2 = d_latent.shape
 
         combination = torch.cat(
-            [torch.repeat_interleave(c, repeats=d_d1, dim=0), d.repeat(c_d1, 1), ]
+            [torch.repeat_interleave(c_latent, repeats=d_d1, dim=0), d_latent.repeat(c_d1, 1), ]
             , dim=-1,
         )
 
