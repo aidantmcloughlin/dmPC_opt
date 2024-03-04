@@ -188,34 +188,34 @@ class Train_Args:
     lr = 0.01 #@param {type: "float"}
     weight_decay = 0.01 #@params {type: "float"}
     
-    # C_VAE_loss_weight = 1 #@param {type: "float"}
-    # C_recon_loss_weight = 100 #@param {type: "float"}
-    # C_kld_weight = 1 #@param {type: "float"}
-    # C_cluster_distance_weight = 200 #@param {type: "float"}
-    # C_update_ratio_weight = 0 #@param {type: "float"}"}
-    C_VAE_loss_weight = 0 #@param {type: "float"}
-    C_recon_loss_weight = 0 #@param {type: "float"}
-    C_kld_weight = 0 #@param {type: "float"}
+    C_VAE_loss_weight = 1 #@param {type: "float"}
+    C_recon_loss_weight = 100 #@param {type: "float"}
+    C_kld_weight = 1 #@param {type: "float"}
+    C_cluster_distance_weight = 200 #@param {type: "float"}
     C_update_ratio_weight = 0 #@param {type: "float"}"}
-    C_cluster_distance_weight = 0 #@param {type: "float"}
+    # C_VAE_loss_weight = 0 #@param {type: "float"}
+    # C_recon_loss_weight = 0 #@param {type: "float"}
+    # C_kld_weight = 0 #@param {type: "float"}
+    # C_update_ratio_weight = 0 #@param {type: "float"}"}
+    # C_cluster_distance_weight = 0 #@param {type: "float"}
     
-    # D_VAE_loss_weight = 1 #@param {type: "float"}
-    # D_recon_loss_weight = 10 #@param {type: "float"}
-    # D_kld_weight = 1 #@param {type: "float"}
-    # D_cluster_distance_weight = 100 #@param {type: "float"}
-    # D_update_ratio_weight = 0 #@param {type: "float"}
-    D_VAE_loss_weight = 0 #@param {type: "float"}
-    D_recon_loss_weight = 0 #@param {type: "float"}
-    D_kld_weight = 0 #@param {type: "float"}
-    D_cluster_distance_weight = 0 #@param {type: "float"}
+    D_VAE_loss_weight = 1 #@param {type: "float"}
+    D_recon_loss_weight = 10 #@param {type: "float"}
+    D_kld_weight = 1 #@param {type: "float"}
+    D_cluster_distance_weight = 100 #@param {type: "float"}
     D_update_ratio_weight = 0 #@param {type: "float"}
+    # D_VAE_loss_weight = 0 #@param {type: "float"}
+    # D_recon_loss_weight = 0 #@param {type: "float"}
+    # D_kld_weight = 0 #@param {type: "float"}
+    # D_cluster_distance_weight = 0 #@param {type: "float"}
+    # D_update_ratio_weight = 0 #@param {type: "float"}
     
     predict_loss_weight = 1000 #@param {type: "float"}
     
     rm_cluster_outliers = False #@param {type: "bool"}
     use_mixture_kld = False #@param {type: "bool"}
     use_weighted_bce = False #param {type: "bool"}
-    use_all_items_for_latent_training = False #param {type: "bool"}
+    use_all_items_for_latent_training = True #param {type: "bool"}
     augment_positives = True #param {type: "bool"}
     
     cVAE_save_path = 'data/model_fits/GDSC_skin_c_vae' #@param
